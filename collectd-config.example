@@ -1,0 +1,14 @@
+<LoadPlugin python>
+    Globals true
+</LoadPlugin>
+
+<Plugin "python">
+  ModulePath  "/usr/bin"
+  LogTraces   true
+  Interactive false
+  Import      "collectd-reacter"
+
+  <Module "collectd-reacter">
+    ThresholdFile "/etc/collectd-reacter.yaml"
+  </Module>
+</Plugin>
