@@ -17,6 +17,8 @@ thresholds:
 
       plugin-plugin_instance.type-type_instance:
         hits:      2
+        persist: true
+        persist_ok: true
         fail:
           max:    0.3
           exec:   '/tmp/test-command'

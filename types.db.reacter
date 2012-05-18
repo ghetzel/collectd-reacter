@@ -1,0 +1,5 @@
+threshold_fail       min:ABSOLUTE:0:U, max:ABSOLUTE:0:U
+threshold_warn       min:ABSOLUTE:0:U, max:ABSOLUTE:0:U
+threshold_success    total:ABSOLUTE:0:U
+hits                 value:ABSOLUTE:0:U
+status               value:ABSOLUTE:-2:2

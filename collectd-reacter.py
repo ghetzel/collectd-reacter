@@ -1,3 +1,12 @@
+#===============================================================================
+# collectd-reacter - a flexible threshold detection and response plugin
+#
+#  SOURCE
+#        https://github.com/ghetzel/collectd-reacter
+#
+#  AUTHOR
+#        Gary Hetzel <garyhetzel@gmail.com>
+#===============================================================================
 import collectd
 import yaml
 import sys
@@ -6,24 +15,29 @@ import re
 import subprocess
 
 threshold_file = None
-store_alerts   = True
+report_stats   = True
 config         = None
 checkstack     = {}
-statsstack     = {}
 
 CMP_OKAY=0
 CMP_WARN=1
 CMP_FAIL=2
 ACTIONS = ['exec']
+PLUGIN_NAME='reacter'
 
+
+# -----------------------------------------------------------------------------
+# CALLBACK: config()
+#   processes the collectd.conf configuration stanza for this plugin
+#
 def config(c):
-  global threshold_file, config, store_alerts
+  global threshold_file, config, report_stats
 
   for ci in c.children:
     if ci.key == 'ThresholdFile':
       threshold_file = ci.values[0]
     elif ci.key == 'ReportStats':
-      store_alerts = ci.values[0]
+      report_stats = ci.values[0]
    
   if not threshold_file:
     raise Exception('Must specify a ThresholdFile configuration file (yaml)')
@@ -31,13 +45,57 @@ def config(c):
   config = yaml.safe_load(open(threshold_file, 'r'))
 
 
+# -----------------------------------------------------------------------------
+# CALLBACK: read()
+#   this is what collectd calls to read values from the plugin
+#
 def read(data=None):
   return
-#  vl = collectd.Values(type='gauge')
+  # global report_stats, checkstack
+
+  # if report_stats:  
+  #   for host in checkstack:
+  #     for metric in checkstack[host]:
+  #       if checkstack[host][metric]['rule'].get('report') == True:
+  #         name = (checkstack[host][metric]['rule'].get('name') or metric)
+
+  #       # dispatch warning stats
+  #         create_value(name, 'threshold_warn',
+  #           [ checkstack[host][metric]['stats']['warn-min'], checkstack[host][metric]['stats']['warn-max'] ]).dispatch()
+
+  #       # dispatch failure stats
+  #         create_value(name, 'threshold_fail',
+  #           [ checkstack[host][metric]['stats']['fail-min'], checkstack[host][metric]['stats']['fail-max'] ]).dispatch()
+
+  #       # dispatch success stats
+  #         create_value(name, 'threshold_success',
+  #           [ checkstack[host][metric]['stats']['success'] ]).dispatch()
+
+  #         create_value(name, 'hits',
+  #           [ checkstack[host][metric]['last_breach_count'] ]).dispatch()
+
+  #         create_value(name, 'status',
+  #           [ checkstack[host][metric]['last_status'] ]).dispatch()
 
 
+# -----------------------------------------------------------------------------
+# create_value
+#   create and return a new collectd.Value() object
+#
+def create_value(name, type_name, values):
+  vl = collectd.Values(plugin=PLUGIN_NAME, type=type_name)
+  vl.plugin_instance = name
+  vl.values = values
+
+  return vl
+
+
+# -----------------------------------------------------------------------------
+# CALLBACK: collectd write()
+#   this is what collectd calls when it receives a new metric observation
+#
 def write(vl, data=None):
-  global config, store_alerts
+  global config, report_stats
   hosts = config['thresholds']['hosts']
   rules = {}
 
@@ -54,11 +112,20 @@ def write(vl, data=None):
 
     for i in vl.values:
       if re.match(rule, metric):
-        observe = push_metric(vl, metric, i, rules[rule])
-     
-        perform_action(observe)
+        push_metric(vl, metric, i, rules[rule])
 
 
+# -----------------------------------------------------------------------------
+# check_value
+#   performs the threshold checks for a given value and returns a status code
+#
+#   returns:
+#     -2  exceeded failure minimum
+#     -1  exceeded warning minimum
+#      0  success
+#      1  exceeded warning maxmimum
+#      2  exceeded failure maxmimum
+#
 def check_value(value, threshold):
   checks = [
     ('fail', 'min', (-1 * CMP_FAIL)),
@@ -67,6 +134,7 @@ def check_value(value, threshold):
     ('warn', 'max', CMP_WARN)
   ]
 
+# perform actual threshold checks
   for i in checks:
     try:
       if i[2] < 0 and value < threshold[i[0]][i[1]]:
@@ -76,16 +144,24 @@ def check_value(value, threshold):
     except KeyError:
       continue
 
-  return 0, {}
+  return 0, threshold.get('okay')
 
 
+
+# -----------------------------------------------------------------------------
+# init_check_stack
+#   initializes the checkstack data structure, used to persist a short-term
+#   record of execution and maintain state
+#
 def init_check_stack(vlist, metric):
-  global checkstack, statsstack, store_alerts
+  global checkstack, report_stats
   host = vlist.host
 
+# initialize host dict if not already there
   if not host in checkstack:
     checkstack[host] = {}
 
+# initialize metric dict in host if not already there
   if not metric in checkstack[host]:
     checkstack[host][metric] = {
       'raw': vlist,
@@ -93,30 +169,36 @@ def init_check_stack(vlist, metric):
       'metric': metric,
       'rule': None,
       'observations': [],
-      'breaches': 0,
       'last_status': 0,
       'last_condition': 'okay',
-      'violation': False
-    }
-
-  if store_alerts:
-    if not host in statsstack:
-      statsstack[host] = {}
-
-    if not metric in statsstack[host]:
-      statsstack[host][metric] = {
+      'last_breach_count': 0,
+      'last_violation_state': False,
+      'violation': False,      
+      'stats': {
         'fail-min': 0,
         'fail-max': 0,
         'warn-min': 0,
         'warn-max': 0,
-        'okay':     0
+        'breaches': 0,
+        'success':  0,
+        'checks':   0
       }
+    }
 
 
+# -----------------------------------------------------------------------------
+# push_metric
+#   pushes a new metric observation onto a host/metric-keyed stack (checkstack)
+#   also performs the value check (calls check_value) and stores the status code
+#   finally, determines whether this observation is in violation based on the
+#   threshold configuration
+#
+#   returns:
+#     the observation record as stored in checkstack (for convenience)
+#
 def push_metric(vlist, metric, value, rule):
   global checkstack
   init_check_stack(vlist, metric)
-
   host = vlist.host
   hits = rule.get('hits') or 1
   observations = rule.get('observations') or hits
@@ -135,53 +217,44 @@ def push_metric(vlist, metric, value, rule):
 
 # do value check
   res, cond = check_value(value, rule)
+
   checkstack[host][metric]['last_status'] = res
   checkstack[host][metric]['last_condition'] = cond
 
-# calculate hits
+# set last violation state
+  checkstack[host][metric]['last_violation_state'] = checkstack[host][metric]['violation']
+
+
+# increment checks
+  checkstack[host][metric]['stats']['checks'] += 1
+
+# determine current violation state
   if res == 0:
-    checkstack[host][metric]['breaches'] = 0
-    checkstack[host][metric]['violation'] = False
+    checkstack[host][metric]['stats']['success'] += 1
+
+  # only succeed after n passing checks
+    if checkstack[host][metric]['stats']['checks'] >= hits:
+      checkstack[host][metric]['stats']['checks'] = 0
+      checkstack[host][metric]['violation'] = False
+      perform_action(checkstack[host][metric])
+
   else:
-    checkstack[host][metric]['breaches'] += 1
+  # only violate every n breaches
+    if checkstack[host][metric]['stats']['checks'] >= hits:
+      checkstack[host][metric]['stats']['checks'] = 0
+      checkstack[host][metric]['violation'] = True
+      perform_action(checkstack[host][metric])
 
-# push result stats
-  if store_alerts:
-    push_stats(host, metric, res)
 
-
-# check for threshold violation
-  if checkstack[host][metric]['breaches'] >= hits:
-    checkstack[host][metric]['breaches'] = 0
-    checkstack[host][metric]['violation'] = True
+  #print 'STATUS', res, hits, checkstack[host][metric]['stats']['checks']
 
   return checkstack[host][metric]
 
 
-def push_stats(host, metric, status):
-  global statsstack
-
-  s = statsstack[host][metric]
-
-  if status == 0:
-    s['okay'] += 0
-    return
-
-  if abs(status) == 1:
-    i = 'warn'
-  elif abs(status) == 2:
-    i = 'fail'
-
-  if status < 0:
-    j = 'min'
-  else:
-    j = 'max'
-
-  s[i+'-'+j] += 1
-
-  #print statsstack
-
-
+# -----------------------------------------------------------------------------
+# perform_action
+#   determines what action to perform (if any) based on an observation
+#
 def perform_action(observe):
   rule = observe.get('rule')
 
@@ -192,16 +265,26 @@ def perform_action(observe):
         cond = observe['last_condition']
 
         if cond and cond.get(k):
+        # if in violation...
           if observe['violation']:
-            func(observe, cond)
+          # ...and either persist=true OR the last observation was clean
+            if not observe['last_violation_state'] or observe['rule'].get('persist'):
+              func(observe, cond)
+
+        # else, not in violation...
           else:
-            if 'okay' in rule:
+          # ...and persist_ok=true OR this is the first clear observation
+            if observe['last_violation_state'] or observe['rule'].get('persist_ok'):
               func(observe, cond)
 
       except KeyError:
         pass
         
 
+# -----------------------------------------------------------------------------
+# perform_action_exec
+#   executes a shell script (called by perform_action)
+#
 def perform_action_exec(observe, condition):
   global config
 
@@ -230,14 +313,25 @@ def perform_action_exec(observe, condition):
   subprocess.Popen(condition['exec'], env=env)
 
 
+# -----------------------------------------------------------------------------
+# perform_action_notify
+#   dispatches a collectd notification back to the daemon
+#   useful for any plugins that respond to these notifications
+#
 def perform_action_notify(observe, condition):
   return
 
+# -----------------------------------------------------------------------------
+# shutdown
+#   called once on daemon shutdown
+#
 def shutdown():
   print "Stopping collectd-reacter"
 
 
-# Register Callbacks  
+# -----------------------------------------------------------------------------
+# Register Callbacks
+# -----------------------------------------------------------------------------
 #collectd.register_init(init)
 collectd.register_config(config)
 collectd.register_read(read)
