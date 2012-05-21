@@ -112,6 +112,7 @@ def write(vl, data=None):
 
     for i in vl.values:
       if re.match(rule, metric):
+        #print 'PUSH', metric, i
         push_metric(vl, metric, i, rules[rule])
 
 
@@ -203,13 +204,12 @@ def push_metric(vlist, metric, value, rule):
   hits = rule.get('hits') or 1
   observations = rule.get('observations') or hits
 
-# actually store things
+# save the current rule
   if not checkstack[host][metric]['rule']:
     checkstack[host][metric]['rule'] = rule
 
 # push observation
   checkstack[host][metric]['observations'].append(value)
-
 
 # store the previous n observations
   if len(checkstack[host][metric]['observations']) > observations:
@@ -223,7 +223,6 @@ def push_metric(vlist, metric, value, rule):
 
 # set last violation state
   checkstack[host][metric]['last_violation_state'] = checkstack[host][metric]['violation']
-
 
 # increment checks
   checkstack[host][metric]['stats']['checks'] += 1
@@ -244,9 +243,6 @@ def push_metric(vlist, metric, value, rule):
       checkstack[host][metric]['stats']['checks'] = 0
       checkstack[host][metric]['violation'] = True
       perform_action(checkstack[host][metric])
-
-
-  #print 'STATUS', res, hits, checkstack[host][metric]['stats']['checks']
 
   return checkstack[host][metric]
 
@@ -269,17 +265,18 @@ def perform_action(observe):
           if observe['violation']:
           # ...and either persist=true OR the last observation was clean
             if not observe['last_violation_state'] or observe['rule'].get('persist'):
+              print 'VIOLATE ', observe['metric']
               func(observe, cond)
 
         # else, not in violation...
           else:
           # ...and persist_ok=true OR this is the first clear observation
             if observe['last_violation_state'] or observe['rule'].get('persist_ok'):
+              print 'OKAY ', observe['metric']
               func(observe, cond)
 
       except KeyError:
         pass
-        
 
 # -----------------------------------------------------------------------------
 # perform_action_exec
@@ -295,6 +292,7 @@ def perform_action_exec(observe, condition):
   env["COLLECTD_PLUGIN_INSTANCE"] = str(observe['raw'].plugin_instance)
   env["COLLECTD_TYPE"] = str(observe['raw'].type)
   env["COLLECTD_TYPE_INSTANCE"] = str(observe['raw'].type_instance)
+  env["COLLECTD_METRIC"] = str(observe['metric'])
   env["COLLECTD_THRESHOLD_STATE"] = str(observe['last_status'])
   env["COLLECTD_VALUE"] = str(observe['observations'][-1])
 
@@ -310,7 +308,7 @@ def perform_action_exec(observe, condition):
 
 
 # execute
-  subprocess.Popen(condition['exec'], env=env)
+  subprocess.Popen(condition['exec'], env=env, shell=True, stdin=None, stdout=None, stderr=None)
 
 
 # -----------------------------------------------------------------------------
