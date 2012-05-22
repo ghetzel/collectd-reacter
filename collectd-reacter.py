@@ -238,6 +238,7 @@ def push_metric(vlist, metric, value, rule):
 
   # only succeed after n passing checks
     if checkstack[host][metric]['stats']['success'] >= hits:
+      checkstack[host][metric]['stats']['success'] = 0
       checkstack[host][metric]['violation'] = False
       perform_action(checkstack[host][metric])
 
@@ -247,6 +248,7 @@ def push_metric(vlist, metric, value, rule):
 
   # only violate every n breaches
     if checkstack[host][metric]['stats']['breaches'] >= hits:
+      checkstack[host][metric]['stats']['breaches'] = 0
       checkstack[host][metric]['violation'] = True
       perform_action(checkstack[host][metric])
 
