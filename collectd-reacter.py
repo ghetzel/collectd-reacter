@@ -112,8 +112,8 @@ def write(vl, data=None):
 
     for i in vl.values:
       if re.match(rule, metric):
-        #print 'PUSH', metric, i
-        push_metric(vl, metric, i, rules[rule])
+        observe = push_metric(vl, metric, i, rules[rule])
+        print "OBSERVATION: F=%s, K=%s, T=%s" % (observe['stats']['breaches'], observe['stats']['success'], observe['stats']['checks'])
 
 
 # -----------------------------------------------------------------------------
@@ -218,6 +218,10 @@ def push_metric(vlist, metric, value, rule):
 # do value check
   res, cond = check_value(value, rule)
 
+# if the condition has a 'hits' setting, it shall override the rule's value for this
+  if cond.get('hits'):
+    hits = cond['hits']
+
   checkstack[host][metric]['last_status'] = res
   checkstack[host][metric]['last_condition'] = cond
 
@@ -229,18 +233,20 @@ def push_metric(vlist, metric, value, rule):
 
 # determine current violation state
   if res == 0:
+    checkstack[host][metric]['stats']['breaches'] = 0
     checkstack[host][metric]['stats']['success'] += 1
 
   # only succeed after n passing checks
-    if checkstack[host][metric]['stats']['checks'] >= hits:
-      checkstack[host][metric]['stats']['checks'] = 0
+    if checkstack[host][metric]['stats']['success'] >= hits:
       checkstack[host][metric]['violation'] = False
       perform_action(checkstack[host][metric])
 
   else:
+    checkstack[host][metric]['stats']['breaches'] += 1
+    checkstack[host][metric]['stats']['success'] = 0
+
   # only violate every n breaches
-    if checkstack[host][metric]['stats']['checks'] >= hits:
-      checkstack[host][metric]['stats']['checks'] = 0
+    if checkstack[host][metric]['stats']['breaches'] >= hits:
       checkstack[host][metric]['violation'] = True
       perform_action(checkstack[host][metric])
 
